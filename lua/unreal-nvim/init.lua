@@ -1,8 +1,25 @@
 ---@diagnostic disable: undefined-global
 local UE = {}
-
 local has_lspconfig, lspconfig = pcall(require, "lspconfig")
 local has_telescope, telescope = pcall(require, "telescope.builtin")
+local utils = require("unreal-nvim.utils")
+local workspace_detect_group = vim.api.nvim_create_augroup("UnrealWorkspaceDetect", { clear = true })
+local workspace_detect_autocmd
+local WORKSPACE_EVENTS = { "VimEnter", "BufEnter", "BufWinEnter", "DirChanged" }
+
+local function register_keymaps(maps)
+	if type(maps) ~= "table" or vim.tbl_isempty(maps) then
+		return
+	end
+	for keymap, info in pairs(maps) do
+		if not info.needs_telescope or has_telescope then
+			vim.keymap.set("n", keymap, info.cmd, {
+				desc = info.desc,
+				silent = true,
+			})
+		end
+	end
+end
 
 local UNREAL_EXCLUDE_GLOBS = {
 	"--glob",
@@ -29,98 +46,47 @@ local UNREAL_EXCLUDE_GLOBS = {
 	"!**/*.{png,jpg,jpeg,gif,svg,webp,bmp,psd,tga,tif,tiff}",
 }
 
-local config = { engine_path = nil, auto_register_clangd = false }
-local cached_engine_root, cached_project_path
+---@type { engine_path: string?; auto_register_clangd: boolean; keymaps: table<string, table>? }
+local config = { engine_path = nil, auto_register_clangd = false, keymaps = nil }
+local features_enabled = false
 
-local function find_in_parents(start, glob)
-	local dir = vim.loop.fs_realpath(start or vim.fn.getcwd()) or vim.fn.getcwd()
-	while dir and dir ~= "" do
-		local files = vim.fn.globpath(dir, glob, false, true)
-		if #files > 0 then
-			return files[1]
-		end
-		local parent = vim.fn.fnamemodify(dir, ":h")
-		if parent == dir then
-			break
-		end
-		dir = parent
+local function load_engine_from_info(uproj)
+	local project_folder = vim.fn.fnamemodify(uproj, ":h")
+	local info_file = project_folder .. "/.ueinfo"
+	local fd = io.open(info_file, "r")
+	if not fd then
+		return nil
 	end
-	return nil
-end
-
-local function find_uproject()
-	if cached_project_path then
-		return cached_project_path
+	local line = fd:read("*l")
+	fd:close()
+	local p = line:match("^UEPath=(.+)")
+	if utils.is_valid_engine_path(p) then
+		return utils.save_engine_path(p, uproj)
 	end
-	local proj = find_in_parents(nil, "*.uproject")
-	if proj then
-		cached_project_path = proj
-	end
-	return proj
-end
-
-local function find_engine_root()
-	local dir = vim.loop.fs_realpath(vim.fn.getcwd()) or vim.fn.getcwd()
-	while dir and dir ~= "" do
-		local src = dir .. "/Engine/Source"
-		if vim.loop.fs_stat(src) then
-			return dir
-		end
-		local parent = vim.fn.fnamemodify(dir, ":h")
-		if parent == dir then
-			break
-		end
-		dir = parent
-	end
-	return nil
-end
-
-local function is_valid_engine_path(p)
-	return p and vim.loop.fs_stat(p .. "/Engine/Build/BatchFiles") ~= nil
-end
-
-local function save_engine_path(path, uproj)
-	cached_engine_root = path
-	if uproj then
-		local project_folder = vim.fn.fnamemodify(uproj, ":h")
-		local file = project_folder .. "/.ueinfo"
-		local fd = io.open(file, "w")
-		if fd then
-			fd:write("UEPath=" .. path)
-			fd:close()
-		end
-	end
-	return path
 end
 
 local function get_engine_root(callback)
-	if config.engine_path and is_valid_engine_path(config.engine_path) then
+	if config.engine_path and utils.is_valid_engine_path(config.engine_path) then
 		return callback(config.engine_path)
-	elseif cached_engine_root then
-		return callback(cached_engine_root)
 	end
-	local uproj = find_uproject()
+	local cached_root = utils.get_cached_engine_root()
+	if cached_root then
+		return callback(cached_root)
+	end
+	local uproj = utils.find_uproject()
 	if uproj then
-		local project_folder = vim.fn.fnamemodify(uproj, ":h")
-		local info_file = project_folder .. "/.ueinfo"
-		local fd = io.open(info_file, "r")
-		if fd then
-			local line = fd:read("*l")
-			fd:close()
-			local p = line:match("^UEPath=(.+)")
-			if is_valid_engine_path(p) then
-				cached_engine_root = p
-				return callback(p)
-			end
+		local info_root = load_engine_from_info(uproj)
+		if info_root then
+			return callback(info_root)
 		end
 	end
 	local env = os.getenv("UE_ENGINE_PATH")
-	if is_valid_engine_path(env) then
-		return callback(save_engine_path(env, uproj))
+	if utils.is_valid_engine_path(env) then
+		return callback(utils.save_engine_path(env, uproj))
 	end
-	local engine_root = find_engine_root()
-	if is_valid_engine_path(engine_root) then
-		return callback(save_engine_path(engine_root, uproj))
+	local engine_root = utils.find_engine_root()
+	if utils.is_valid_engine_path(engine_root) then
+		return callback(utils.save_engine_path(engine_root, uproj))
 	end
 	vim.ui.input({ prompt = "Enter Unreal Engine path:" }, function(input)
 		if not input or input == "" then
@@ -128,8 +94,8 @@ local function get_engine_root(callback)
 			return callback(nil)
 		end
 		local real = vim.loop.fs_realpath(input)
-		if is_valid_engine_path(real) then
-			return callback(save_engine_path(real, uproj))
+		if utils.is_valid_engine_path(real) then
+			return callback(utils.save_engine_path(real, uproj))
 		else
 			vim.notify("[Unreal] Invalid engine path: " .. input, vim.log.levels.ERROR)
 			return callback(nil)
@@ -158,13 +124,13 @@ local function ensure_output_window()
 		focusable = true,
 		zindex = 50,
 	})
-	vim.api.nvim_win_set_option(UE.win, "winblend", 10)
-	vim.api.nvim_win_set_option(UE.win, "wrap", true)
-	vim.api.nvim_win_set_option(UE.win, "mouse", "a")
-	vim.api.nvim_buf_set_option(UE.buf, "filetype", "unreal_output")
-	vim.api.nvim_buf_set_option(UE.buf, "bufhidden", "wipe")
-	vim.api.nvim_buf_set_option(UE.buf, "modifiable", true)
-	vim.api.nvim_buf_set_option(UE.buf, "readonly", false)
+	vim.api.nvim_set_option_value("winblend", 10, { win = UE.win })
+	vim.api.nvim_set_option_value("wrap", true, { win = UE.win })
+	vim.api.nvim_set_option_value("mouse", "a", { win = UE.win })
+	vim.api.nvim_set_option_value("filetype", "unreal_output", { buf = UE.buf })
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = UE.buf })
+	vim.api.nvim_set_option_value("modifiable", true, { buf = UE.buf })
+	vim.api.nvim_set_option_value("readonly", false, { buf = UE.buf })
 	-- Easily close the output window
 	vim.api.nvim_buf_set_keymap(
 		UE.buf,
@@ -223,7 +189,7 @@ local function make_ubt_cmd(mode, uproj, target, plat, conf, eng)
 end
 
 local function run_ubt(scope, mode)
-	local uproj = scope == "Project" and find_uproject()
+	local uproj = scope == "Project" and utils.find_uproject()
 	if scope == "Project" and not uproj then
 		return vim.notify("[Unreal][Project] .uproject not found", vim.log.levels.ERROR)
 	end
@@ -306,11 +272,144 @@ local function write_clangd(root)
 	vim.cmd("LspRestart clangd")
 end
 
+local function register_unreal_commands()
+	local function add_command(name, callback)
+		vim.api.nvim_create_user_command(name, callback, {})
+	end
+
+	for _, scope in ipairs({ "Project", "Engine" }) do
+		add_command("UEBuild" .. scope, function()
+			run_ubt(scope, MODES.BUILD)
+		end)
+		add_command("UEHeader" .. scope, function()
+			run_ubt(scope, MODES.HEADER)
+		end)
+		add_command("UECompileCommands" .. scope, function()
+			run_ubt(scope, MODES.COMPILE)
+		end)
+		add_command("UEClangdConfig" .. scope, function()
+			if scope == "Project" then
+				local u = utils.find_uproject()
+				if u then
+					write_clangd(vim.fn.fnamemodify(u, ":h"))
+				end
+			else
+				get_engine_root(function(r)
+					if r then
+						write_clangd(r)
+					end
+				end)
+			end
+		end)
+	end
+
+	add_command("UECwdProject", function()
+		local u = utils.find_uproject()
+		if u then
+			local root = vim.fn.fnamemodify(u, ":h")
+			vim.cmd("cd " .. vim.fn.fnameescape(root))
+			vim.notify("[Unreal] CWD→Project: " .. root, vim.log.levels.INFO)
+		else
+			vim.notify("[Unreal] Project root not found.", vim.log.levels.ERROR)
+		end
+	end)
+
+	add_command("UECwdEngine", function()
+		get_engine_root(function(r)
+			if r then
+				vim.cmd("cd " .. vim.fn.fnameescape(r))
+				vim.notify("[Unreal] CWD→Engine: " .. r, vim.log.levels.INFO)
+			end
+		end)
+	end)
+
+	if has_telescope then
+		local find_cmd = vim.iter({ { "rg", "--files", "--hidden" }, UNREAL_EXCLUDE_GLOBS }):flatten():totable()
+		local grep_args = vim.iter({ { "--hidden" }, UNREAL_EXCLUDE_GLOBS }):flatten():totable()
+
+		add_command("TelescopeUnrealFind", function()
+			local roots = {}
+			local u = utils.find_uproject()
+			if u then
+				table.insert(roots, vim.fn.fnamemodify(u, ":h"))
+			end
+			get_engine_root(function(r)
+				if r then
+					table.insert(roots, r)
+				end
+				telescope.find_files({ prompt_title = "Unreal Find", search_dirs = roots, find_command = find_cmd })
+			end)
+		end)
+
+		add_command("TelescopeUnrealGrep", function()
+			local roots = {}
+			local u = utils.find_uproject()
+			if u then
+				table.insert(roots, vim.fn.fnamemodify(u, ":h"))
+			end
+			get_engine_root(function(r)
+				if r then
+					table.insert(roots, r)
+				end
+				telescope.live_grep({ prompt_title = "Unreal Grep", search_dirs = roots, additional_args = grep_args })
+			end)
+		end)
+	end
+
+	register_keymaps(config.keymaps)
+end
+
+local function detect_start_path(ev)
+	if ev then
+		local path = ev.file
+		if (not path or path == "") and ev.buf and vim.api.nvim_buf_is_valid(ev.buf) then
+			path = vim.api.nvim_buf_get_name(ev.buf)
+		end
+		if path and path ~= "" then
+			return path
+		end
+	end
+	return vim.fn.getcwd()
+end
+
+local function enable_unreal_features(start)
+	if features_enabled then
+		return true
+	end
+	if not utils.is_unreal_workspace(start) then
+		return false
+	end
+	features_enabled = true
+	register_unreal_commands()
+	return true
+end
+
+local function workspace_detection_callback(ev)
+	if enable_unreal_features(detect_start_path(ev)) and workspace_detect_autocmd then
+		vim.api.nvim_del_autocmd(workspace_detect_autocmd)
+		workspace_detect_autocmd = nil
+	end
+end
+
+local function schedule_workspace_detection()
+	if workspace_detect_autocmd or features_enabled then
+		return
+	end
+	workspace_detect_autocmd = vim.api.nvim_create_autocmd(WORKSPACE_EVENTS, {
+		group = workspace_detect_group,
+		callback = workspace_detection_callback,
+	})
+end
+
 function UE.setup(opts)
+	opts = opts or {}
 	config.engine_path = opts.engine_path or config.engine_path
 	config.auto_register_clangd = opts.auto_register_clangd or config.auto_register_clangd
+	if opts.keymaps ~= nil then
+		config.keymaps = opts.keymaps
+	end
 	-- Try to find the project on load.
-	local uproj = find_uproject()
+	local uproj = utils.find_uproject()
 
 	if config.auto_register_clangd and has_lspconfig and lspconfig.clangd then
 		lspconfig.clangd.setup({
@@ -335,102 +434,8 @@ function UE.setup(opts)
 		end
 	end
 
-	for _, scope in ipairs({ "Project", "Engine" }) do
-		vim.api.nvim_create_user_command("UEBuild" .. scope, function()
-			run_ubt(scope, MODES.BUILD)
-		end, {})
-		vim.api.nvim_create_user_command("UEHeader" .. scope, function()
-			run_ubt(scope, MODES.HEADER)
-		end, {})
-		vim.api.nvim_create_user_command("UECompileCommands" .. scope, function()
-			run_ubt(scope, MODES.COMPILE)
-		end, {})
-		vim.api.nvim_create_user_command("UEClangdConfig" .. scope, function()
-			if scope == "Project" then
-				local u = find_uproject()
-				if u then
-					write_clangd(vim.fn.fnamemodify(u, ":h"))
-				end
-			else
-				get_engine_root(function(r)
-					if r then
-						write_clangd(r)
-					end
-				end)
-			end
-		end, {})
-	end
-
-	vim.api.nvim_create_user_command("UECwdProject", function()
-		local u = find_uproject()
-		if u then
-			local root = vim.fn.fnamemodify(u, ":h")
-			vim.cmd("cd " .. vim.fn.fnameescape(root))
-			vim.notify("[Unreal] CWD→Project: " .. root, vim.log.levels.INFO)
-		else
-			vim.notify("[Unreal] Project root not found.", vim.log.levels.ERROR)
-		end
-	end, {})
-
-	vim.api.nvim_create_user_command("UECwdEngine", function()
-		get_engine_root(function(r)
-			if r then
-				vim.cmd("cd " .. vim.fn.fnameescape(r))
-				vim.notify("[Unreal] CWD→Engine: " .. r, vim.log.levels.INFO)
-			end
-		end)
-	end, {})
-
-	local function map(lhs, rhs, desc)
-		vim.keymap.set("n", lhs, rhs, { desc = desc, silent = true })
-	end
-
-	map("<leader>ub", "<cmd>UEBuildProject<CR>", "Unreal Build Project")
-	map("<leader>uB", "<cmd>UEBuildEngine<CR>", "Unreal Build Engine")
-	map("<leader>uh", "<cmd>UEHeaderProject<CR>", "Unreal Header Project")
-	map("<leader>uH", "<cmd>UEHeaderEngine<CR>", "Unreal Header Engine")
-	map("<leader>uc", "<cmd>UECompileCommandsProject<CR>", "Unreal CompCommands Project")
-	map("<leader>uC", "<cmd>UECompileCommandsEngine<CR>", "Unreal CompCommands Engine")
-	map("<leader>ux", "<cmd>UEClangdConfigProject<CR>", "Unreal ClangdConfig Project")
-	map("<leader>uX", "<cmd>UEClangdConfigEngine<CR>", "Unreal ClangdConfig Engine")
-	map("<leader>up", "<cmd>UECwdProject<CR>", "Unreal CWD→Project")
-	map("<leader>ue", "<cmd>UECwdEngine<CR>", "Unreal CWD→Engine")
-
-	if has_telescope then
-		local find_cmd = { "rg", "--files", "--hidden" }
-		find_cmd = vim.tbl_flatten({ find_cmd, UNREAL_EXCLUDE_GLOBS })
-		local grep_args = vim.tbl_flatten({ { "--hidden" }, UNREAL_EXCLUDE_GLOBS })
-
-		vim.api.nvim_create_user_command("TelescopeUnrealFind", function()
-			local roots = {}
-			local u = find_uproject()
-			if u then
-				table.insert(roots, vim.fn.fnamemodify(u, ":h"))
-			end
-			get_engine_root(function(r)
-				if r then
-					table.insert(roots, r)
-				end
-				telescope.find_files({ prompt_title = "Unreal Find", search_dirs = roots, find_command = find_cmd })
-			end)
-		end, {})
-
-		vim.api.nvim_create_user_command("TelescopeUnrealGrep", function()
-			local roots = {}
-			local u = find_uproject()
-			if u then
-				table.insert(roots, vim.fn.fnamemodify(u, ":h"))
-			end
-			get_engine_root(function(r)
-				if r then
-					table.insert(roots, r)
-				end
-				telescope.live_grep({ prompt_title = "Unreal Grep", search_dirs = roots, additional_args = grep_args })
-			end)
-		end, {})
-
-		map("<leader>uf", "<cmd>TelescopeUnrealFind<CR>", "Unreal Find")
-		map("<leader>ug", "<cmd>TelescopeUnrealGrep<CR>", "Unreal Grep")
+	if not enable_unreal_features(vim.fn.getcwd()) then
+		schedule_workspace_detection()
 	end
 end
 

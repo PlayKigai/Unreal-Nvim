@@ -31,21 +31,40 @@ This plugin provides commands for both your Unreal project and the engine.
   Windows: `winget install LLVM.LLVM`  
 - Neovim 0.8+  
 - Unreal Engine 5.0+  
+- Install [`ripgrep`](https://github.com/BurntSushi/ripgrep) (`rg`) for Telescope helpers.
 - Add to your lazy.nvim plugins:
   ```lua
   {
     'PlayKigai/Unreal-Nvim',
     ft = {'cpp', 'c', 'h', 'hpp', 'cs', 'ini', 'uproject', 'uplugin'},
     config = function()
+      local keymaps = {
+        ["<leader>Ub"] = { cmd = "<cmd>UEBuildProject<CR>", desc = "Unreal Build Project" },
+        ["<leader>UB"] = { cmd = "<cmd>UEBuildEngine<CR>", desc = "Unreal Build Engine" },
+        ["<leader>Uh"] = { cmd = "<cmd>UEHeaderProject<CR>", desc = "Unreal Header Project" },
+        ["<leader>UH"] = { cmd = "<cmd>UEHeaderEngine<CR>", desc = "Unreal Header Engine" },
+        ["<leader>Uc"] = { cmd = "<cmd>UECompileCommandsProject<CR>", desc = "Unreal CompCommands Project" },
+        ["<leader>UC"] = { cmd = "<cmd>UECompileCommandsEngine<CR>", desc = "Unreal CompCommands Engine" },
+        ["<leader>Ux"] = { cmd = "<cmd>UEClangdConfigProject<CR>", desc = "Unreal ClangdConfig Project" },
+        ["<leader>UX"] = { cmd = "<cmd>UEClangdConfigEngine<CR>", desc = "Unreal ClangdConfig Engine" },
+        ["<leader>Up"] = { cmd = "<cmd>UECwdProject<CR>", desc = "Unreal CWD→Project" },
+        ["<leader>Ue"] = { cmd = "<cmd>UECwdEngine<CR>", desc = "Unreal CWD→Engine" },
+        ["<leader>Uf"] = { cmd = "<cmd>TelescopeUnrealFind<CR>", desc = "Unreal Find", needs_telescope = true },
+        ["<leader>Ug"] = { cmd = "<cmd>TelescopeUnrealGrep<CR>", desc = "Unreal Grep", needs_telescope = true },
+      }
+
+      -- Default mappings
       require('unreal-nvim').setup({
         -- engine_path = "C:/Program Files/Epic Games/UE_5.5", -- optional
-        auto_register_clangd = true -- if true, tries to auto-configure clangd for Unreal (needs nvim-lspconfig)
+        auto_register_clangd = true, -- if true, tries to auto-configure clangd for Unreal (needs nvim-lspconfig)
+        keymaps = keymaps,
       })
     end,
   }
   ```
   > Note: `auto_register_clangd` tries to auto-configure clangd using nvim-lspconfig if available.  
   > You can always set up clangd manually if you prefer.
+  > The plugin maps the `<leader>U*` table automatically using the `keymaps` option you pass, and it skips Telescope-only entries when Telescope is unavailable.
 
 ## How it works
 
