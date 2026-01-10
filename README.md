@@ -38,6 +38,7 @@ This plugin provides commands for both your Unreal project and the engine.
     'PlayKigai/Unreal-Nvim',
     ft = {'cpp', 'c', 'h', 'hpp', 'cs', 'ini', 'uproject', 'uplugin'},
     config = function()
+      -- Default mappings
       local keymaps = {
         ["<leader>Ub"] = { cmd = "<cmd>UEBuildProject<CR>", desc = "Unreal Build Project" },
         ["<leader>UB"] = { cmd = "<cmd>UEBuildEngine<CR>", desc = "Unreal Build Engine" },
@@ -53,7 +54,6 @@ This plugin provides commands for both your Unreal project and the engine.
         ["<leader>Ug"] = { cmd = "<cmd>TelescopeUnrealGrep<CR>", desc = "Unreal Grep", needs_telescope = true },
       }
 
-      -- Default mappings
       require('unreal-nvim').setup({
         -- engine_path = "C:/Program Files/Epic Games/UE_5.5", -- optional
         auto_register_clangd = true, -- if true, tries to auto-configure clangd for Unreal (needs nvim-lspconfig)
