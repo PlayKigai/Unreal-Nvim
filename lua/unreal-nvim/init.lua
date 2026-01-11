@@ -5,7 +5,7 @@ local has_telescope, telescope = pcall(require, "telescope.builtin")
 local utils = require("unreal-nvim.utils")
 local workspace_detect_group = vim.api.nvim_create_augroup("UnrealWorkspaceDetect", { clear = true })
 local workspace_detect_autocmd
-local WORKSPACE_EVENTS = { "VimEnter", "BufEnter", "BufWinEnter", "DirChanged" }
+local WORKSPACE_EVENTS = { "VimEnter", "BufReadPost", "DirChanged" }
 
 local function register_keymaps(maps)
 	if type(maps) ~= "table" or vim.tbl_isempty(maps) then
